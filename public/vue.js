@@ -1,121 +1,99 @@
-const API_URL = "https://darius-project.herokuapp.com/api";
+const { MongoClient, ObjectId } = require("mongodb");
+// establish a connection with mongodb
+const uri =
+"mongodb+srv://darius:Darius2001@cluster0.hlvaagz.mongodb.net/?retryWrites=true&w=majority"; //uri for mongodb
+var client = new MongoClient(uri);
 
-let webstore = new Vue({
-  el: "#app",
-  data: {
-    lessons: [],
-    sortBy: "topic",
-    sortOrder: "asc",
-    activePage: "lessons",
-    name: "",
-    phone: "",
-    targetLesson: null,
-    searchTerm: "",
-  },
-  methods: {
-    togglePage() {
-      if (this.activePage === "lessons") {
-        this.activePage = "confirm";
-      } else {
-        this.activePage = "lessons";
-      }
-    },
-    purchaseLesson(lesson) {
-      this.targetLesson = lesson;
-      this.togglePage();
-    },
-    cancelLesson() {
-      this.targetLesson = null;
-      this.togglePage();
-    },
-    async confirm() {
-      await fetch(`${API_URL}/order`, {
-        method: "POST",
-        body: JSON.stringify({
-          name: this.name,
-          phone: this.phone,
-          lesson_id: this.targetLesson._id,
-          spaces: 1,
-        }),
-      }).then(async (response) => {
-        let data = await response.json();
+async function connect() {
+  // try to establish a connection with the mongodb
+  try {
+    await client.connect().then(() => console.log("connected to mongodb"));
+  } catch (e) {
+    console.log("error while connecting to mongodb", e);
+  }
+}
 
-        await fetch(`${API_URL}/lesson/${this.targetLesson._id}`, {
-          method: "PUT",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            space: 1,
-          }),
-        }).then(() => {
-          Swal.fire({
-            title: "Confirmed!",
-            text: `${this.name} Thank you. We will contact you at ${this.phone}. ${data.msg}`,
-            icon: "success",
-            confirmButtonText: "Cool",
-          }).then((result) => {
-            if (result.isConfirmed) {
-              window.location.reload();
-            }
-          });
-        });
-      });
-    },
-    async search() {
-      let response = await fetch(`${API_URL}/search/${this.searchTerm}`, {
-        method: "GET",
-      });
-      let data = await response.json();
-      this.lessons = data;
+connect();
 
-      console.log("data: ", data);
-    },
-    async getLessons() {
-      let response = await fetch(`${API_URL}/lesson`, {
-        method: "GET",
-      });
-      let data = await response.json();
-      this.lessons = data;
-    }
-  },
-  computed: {
-    sortedLessons: function () {
-      // if sorting in ascending order
-      if (this.sortOrder === "asc") {
-        return this.lessons.sort((a, b) =>
-          a[this.sortBy] > b[this.sortBy]
-            ? 1
-            : b[this.sortBy] > a[this.sortBy]
-            ? -1
-            : 0
-        );
-      }
-      // if sorting in descending order
-      return this.lessons.sort((a, b) =>
-        a[this.sortBy] > b[this.sortBy]
-          ? -1
-          : b[this.sortBy] > a[this.sortBy]
-          ? 1
-          : 0
-      );
-    },
-    canCheckout: function () {
-      let isNameCorrect = /^[a-zA-Z\s]*$/.test(this.name); // regex is used to check if name contains letters only
-      let isPhoneCorrect = /^[0-9]+$/.test(this.phone) && this.phone.length > 5; // regex is used to check if phone contains number only AND it has more than 5 digits
-      return isNameCorrect && isPhoneCorrect;
-    },
-  },
-  mounted() {
-    this.getLessons()
-  },
-  watch: {
-    searchTerm() {
-      if(this.searchTerm) {
-        this.search();
-      } else {
-        this.getLessons();
-      }
-    },
-  },
+// defining all the functions responsible for contacting mongodb and doing database transactions
+async function createOrder(order) {
+	return await client.db("project").collection("orders").insertOne(order);
+}
+
+async function getLessons() { // retrieves data from mongodb via node.js which the client that finds all the collections 
+	return client
+    .db("project")
+    .collection("lessons")
+    .find().toArray(); // the array method is used to convert the lesson information
+}
+
+async function updateLesson(id, space) { // The mongodb allows the two function of the unique id of the lessons and the spaces to be updated.
+	return await client // this function weather the database lessons has been updated
+    .db("project")
+    .collection("lessons")
+    .updateOne({ _id: ObjectId(id) }, { $inc: { "space": -space } }); // This updates x amount of spaces when the method is filtered and updated from the mongodb collections
+}
+
+async function searchLesson(searchTerm) { // search lesson function allows the mongodb used to search for the lessons matching in the database from the collections
+return client
+  .db("project")
+  .collection("lessons") 
+  .find({
+    topic: { $regex: searchTerm, $options: "is" },
+  })
+  .toArray();
+}
+
+// setting up express server
+const express = require("express");
+var cors = require("cors");
+const app = express();
+app.use(express.json());
+app.use(cors());  // enabling CORS to avoid CORS error between frontend and backend
+
+// defining middlewares
+const logger = function (req, res, next) {
+  console.log(`Request for ${req.originalUrl}`);
+  next();
+};
+
+// registering middlewares
+app.use(logger);
+app.use("/public", express.static(__dirname + "/public"));  // inbuild "static" middleware to serve course images
+
+// Defining api routes // ASYNC allows the perform updates which can delay time to the thread exuction 
+app.get("/api/lesson", async (req, res) => { // the req respresents the http request for the express.js
+  const result = await getLessons();
+  res.send(result); // sends the http 
+});
+
+app.post("/api/order", async (req, res) => { // Post allows the requests to api and order 
+	const result = await createOrder(req.body); // when creating order the function waits for the user to pass a response to the api then allows a response when it's available.
+  res.send({
+		msg: `Reservation with id [${result.insertedId}] has been created successfully!`, // Once selected a lesson
+	});
+});
+
+app.put("/api/lesson/:id", async(req, res) => { // This allows the id of the lessons to be updated from this section which passes the lessons through the req/body/space  which the function sends a response to the user.
+	const result = await updateLesson(req.params.id, req.body.space);
+	res.send({
+    msg: `Spaces in the lesson [id: ${req.params.id}] updated after successful order`, // The route allows the collection to update the x amount of lesson
+  });
+});
+
+app.get("/api/search/:searchTerm", async (req, res) => {  
+  const result = await searchLesson(req.params.searchTerm);
+  res.send(result);
+});
+
+app.get("/", async (req, res) => {
+  res.sendFile(__dirname +"/index.html");
+});
+
+// PORT
+const PORT = process.env.PORT || 3000;
+
+// Starting the server
+app.listen(PORT, () => {
+  console.log(`Server is running on PORT: ${PORT}`);
 });
